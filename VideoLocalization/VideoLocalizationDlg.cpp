@@ -1,4 +1,3 @@
-
 // VideoLocalizationDlg.cpp : implementation file
 //
 
@@ -6,11 +5,9 @@
 #include "VideoLocalization.h"
 #include "VideoLocalizationDlg.h"
 #include "afxdialogex.h"
+#include "..\Camera\CameraManaging.h"
 
-#ifdef _DEBUG
-#define new DEBUG_NEW
-#endif
-
+//User global functions defination
 
 // CAboutDlg dialog used for App About
 
@@ -50,15 +47,25 @@ END_MESSAGE_MAP()
 
 
 CVideoLocalizationDlg::CVideoLocalizationDlg(CWnd* pParent /*=NULL*/)
-	: CDialogEx(IDD_VIDEOLOCALIZATION_DIALOG, pParent), m_pSPoint{ static_cast<SPoint*>(calloc(1, sizeof SPoint)) }, m_Figure{}
+	: CDialogEx(IDD_VIDEOLOCALIZATION_DIALOG, pParent), m_FileReader{L"Config.txt"}, m_pSPoint {static_cast<SPoint*>(calloc(1, sizeof SPoint))},
+	m_LocationAnalyser{ m_FileReader }, m_Receiver{ m_LocationAnalyser }, m_FigureInput{ [&](CLocAna* pPar) {while (true) { m_Receiver.Receive(*pPar); } }, &m_LocationAnalyser },
+	m_ProcessData{ [&](void) {while (true) { m_Receiver.Process(); } } }, m_MainViewImage{}, m_Figure{ m_FileReader }, m_CameraManager{},m_InfoFusion{}
 {
 	m_hIcon = AfxGetApp()->LoadIcon(IDR_MAINFRAME);
+
+	//User peripheral device initialization
+	m_CameraManager.InitialResources();
+
+	//User peripheral device initialization
+
 }
 
 void CVideoLocalizationDlg::DoDataExchange(CDataExchange* pDX)
 {
 	CDialogEx::DoDataExchange(pDX);
 	DDX_Control(pDX, IDC_LOCATION_POINTS, m_location_axis);
+	DDX_Control(pDX, IDC_View1, m_MainViewControl);
+	DDX_Control(pDX, IDC_View3, m_SideViewControl);
 }
 
 BEGIN_MESSAGE_MAP(CVideoLocalizationDlg, CDialogEx)
@@ -66,9 +73,10 @@ BEGIN_MESSAGE_MAP(CVideoLocalizationDlg, CDialogEx)
 	ON_WM_PAINT()
 	ON_WM_QUERYDRAGICON()
 	ON_STN_CLICKED(IDC_LOCATION_POINTS, &CVideoLocalizationDlg::OnStnClickedLocationPoints)
-	ON_BN_CLICKED(IDC_DRAW, &CVideoLocalizationDlg::OnBnClickedDraw)
-	ON_ACN_START(IDC_ANIMATE1, &CVideoLocalizationDlg::OnAcnStartAnimate1)
+//	ON_BN_CLICKED(IDC_DRAW, &CVideoLocalizationDlg::OnBnClickedDraw)
+//	ON_ACN_START(IDC_ANIMATE1, &CVideoLocalizationDlg::OnAcnStartAnimate1)
 	ON_WM_TIMER()
+//	ON_STN_CLICKED(IDC_View1, &CVideoLocalizationDlg::OnStnClickedView1)
 END_MESSAGE_MAP()
 
 
@@ -104,8 +112,28 @@ BOOL CVideoLocalizationDlg::OnInitDialog()
 	SetIcon(m_hIcon, FALSE);		// Set small icon
 
 	// TODO: Add extra initialization here
-	SetTimer(1, 5, NULL);
+	SetTimer(1, 59, NULL);
 
+	m_CameraManager.StartCapture();
+
+	/*Test code*/
+	static auto DC{ m_location_axis.GetDC() };
+	static auto Rect{ &(m_Figure.GetPlotRect()) };
+	m_location_axis.GetClientRect(Rect);//Firstly, use the picture control to get the client rect. 
+	m_Figure.SelectObject(DC);//Secondly, get the picture control's dc, then give it to the figure class to draw.
+
+	static auto SomeHdc{ m_MainViewControl.GetDC()->GetSafeHdc() };
+	m_MainViewImage.SetHDC(SomeHdc);
+	static CRect SomeRect{};
+	m_MainViewControl.GetClientRect(&SomeRect);
+	m_MainViewImage.SetRect(&SomeRect);
+
+	static auto SomeHdc1{ m_SideViewControl.GetDC()->GetSafeHdc() };
+	m_SideViewImage.SetHDC(SomeHdc1);
+	static CRect SomeRect1{};
+	m_SideViewControl.GetClientRect(&SomeRect1);
+	m_SideViewImage.SetRect(&SomeRect1);
+	/*Test code*/
 
 	return TRUE;  // return TRUE  unless you set the focus to a control
 }
@@ -166,49 +194,32 @@ void CVideoLocalizationDlg::OnStnClickedLocationPoints()
 	// TODO: Add your control notification handler code here
 }
 
-POINT Point{ 2,2 };
-
-void CVideoLocalizationDlg::OnBnClickedDraw()
-{
-	// TODO: Add your control notification handler code here
-	CFigure Figure;
-	m_location_axis.GetClientRect(&(Figure.GetPlotRect()));
-	Figure.SelectObject(m_location_axis.GetDC());
-	Figure.MovePointTo(Point);
-}
-
-
 void CVideoLocalizationDlg::OnAcnStartAnimate1()
 {
 	// TODO: Add your control notification handler code here
 }
 
-
+size_t AnalyseCount{};
 void CVideoLocalizationDlg::OnTimer(UINT_PTR nIDEvent)
 {
 	// TODO: Add your message handler code here and/or call default
-	/*Test codes*/
-	static bool Run{ false };
-	
-	m_location_axis.GetClientRect(&(m_Figure.GetPlotRect()));
-	m_Figure.SelectObject(m_location_axis.GetDC());
-	//m_Drawer.SetDC(m_location_axis.GetDC());
-	if (Run == false)
-	{
-	/*	m_Drawer.DrawBackground(DrawRect, RGB(255, 255, 255));
-		m_Drawer.SetCurrentPoint(Point);
-		m_Drawer.DrawPoint(10, RGB(255, 0, 0));*/
-		m_Figure.Plot(Point);
-	}
-	if (Run == true)
-	{
-		Point.x += 1;
-		Point.y += 1;
-		//m_Drawer.MovePointTo(Point);
-		m_Figure.MovePointTo(Point);
-	}
-	Run = true;
-	/*Test Codes*/
 
+	m_InfoFusion.SetJudgeArgs(m_Figure.GetPlotRect(), m_FileReader);
+	m_InfoFusion.SetMapPointer(m_CameraManager.GetImages());
+
+	auto CurrentPoint{ m_Receiver.Dequeue() };
+
+	/*Test codes*/
+	m_Figure.ClearPoints();
+	m_Figure.Plot(CurrentPoint);
+
+	m_CameraManager.RetrieveImage();
+
+	auto MainImage{ m_InfoFusion.GetMainViewMat(CurrentPoint) };
+	m_MainViewImage.ShowImage(MainImage);
+
+	auto SideImage{ m_InfoFusion.GetSideViewMats(FIRST_QUADRANT_CAM_ID) };
+	m_SideViewImage.ShowImage(SideImage);
+	/*Test Codes*/
 	CDialogEx::OnTimer(nIDEvent);
 }

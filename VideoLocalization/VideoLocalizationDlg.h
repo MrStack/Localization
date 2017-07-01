@@ -4,8 +4,11 @@
 
 #pragma once
 #include "afxwin.h"
-
+#include<thread>
 #include<vector>
+#include"..\AxisAnalyse\Location_Analyse.h"
+#include"..\Camera\CMatToMFCCImage.h"
+#include"..\Camera\CameraManaging.h"
 
 using namespace std;
 
@@ -86,15 +89,16 @@ public:
 		m_pCDC->Rectangle(m_pRect);
 		m_DrawBrush.DeleteObject();
 	}
-	void SetCurrentPoint(POINT Point)
+	void SetCurrentPoint(POINT Point)//With point manipulation
 	{
-		m_CurrentPoint = Point;
+		m_CurrentPoint = { Point.x,m_pRect->Height() - Point.y };
 		m_pCDC->MoveTo(m_CurrentPoint);
 	}
-	void SetCurrentPoint(int x, int y)
+	void SetCurrentPoint(int x, int y)//With point manipulation
 	{
 		m_CurrentPoint.x = x;
-		m_CurrentPoint.y = y;
+		m_CurrentPoint.y = m_pRect->Height() - y;
+		
 		m_pCDC->MoveTo(m_CurrentPoint);
 	}
 	void SetCurrentColor(COLORREF clrColor)
@@ -194,6 +198,66 @@ public:
 	}
 };
 
+using std::vector;
+
+template<typename SPoint>
+class CFilter
+{
+protected:
+	vector<SPoint> m_Buffer;
+	vector<SPoint> m_Filterd;
+public:
+	CFilter(void) :m_Buffer{} {}
+	~CFilter() = default;
+
+	void Insert(SPoint& InsertData)
+	{
+		m_Buffer.push_back(InsertData);
+	}
+	void InsertFilterd(SPoint& InsertPoint)
+	{
+		m_Filterd.push_back(InsertPoint);
+	}
+	void Delete(SPoint& InsertData)
+	{
+		for (vector<SPoint>::iterator& iter{ m_Buffer.begin() }; iter != m_Buffer.end(); iter++)
+		{
+			if (*iter == InsertData)
+			{
+				iter = m_Buffer.erase(iter);
+			}
+		}
+	}
+	void Delete(int nIndex)
+	{
+		m_Buffer.erase(nIndex);
+	}
+	size_t Size(void)
+	{
+		return m_Buffer.size();
+	}
+	//This function takes a function object, which processes the m_Buffer
+	template<class Fun>
+	void Filt(Fun& fFunObj)
+	{
+		fFunObj(m_Buffer,m_Filterd);
+	}
+	void ClearBuff(void)
+	{
+		m_Buffer.clear();
+		m_Filterd.clear();
+	}
+	vector<SPoint>& GetBuffer(void)
+	{
+		return m_Filterd;
+	}
+
+	SPoint& operator[](int Index)
+	{
+		return m_Filterd.at(Index);
+	}
+};
+
 class CFigure
 {
 protected:
@@ -212,7 +276,7 @@ protected:
 	};
 	struct SFigureStyle
 	{
-		struct SPoint
+		struct SPointAttr
 		{
 			int nPointWidth;
 			COLORREF clrPointColor;
@@ -228,7 +292,38 @@ protected:
 	CDrawing m_Drawer;
 	bool m_Drew;//Check if the background color is drew
 
-	//Protected functions
+	//Real world rectangular.
+	const struct SRectangular m_RealWorldRectan;
+	//Rect and real world rect ratio.
+	//This should be known so the showing of points in the axis could zoom automatically.
+	struct SRectangular m_RWR_R_Ratio;
+
+	//Converte the real world point to the showing rect of point inside the program window.
+	POINT RealWorldPointToPoint(SPoint& lrPoint)
+	{
+		return POINT{ static_cast<long>(lrPoint.x*m_RWR_R_Ratio.Width),static_cast<long>(lrPoint.y*m_RWR_R_Ratio.Height) };
+	}
+	
+public:
+	CFigure(CDC* pCDC, CReadFile& lrConfigFile)
+		:m_Drawer{ pCDC }, m_Axis{ true,true,nullptr,nullptr,0,0 },
+		m_FigureStyle{ {3,RGB(0,122,204),DOT},RGB(255,255,255) },
+		m_Rect{}, m_Drew{ false }, m_RealWorldRectan{ std::get<0>(lrConfigFile.ReadRect()),std::get<1>(lrConfigFile.ReadRect()) }
+	{
+		//DrawBkColor(m_FigureStyle.clrAxisBkColor);
+	}
+	CFigure(CReadFile& lrConfigFile)
+		:m_Drawer{}, m_Axis{ true,true,nullptr,nullptr,0,0 },
+		m_FigureStyle{ { 3,RGB(0,122,204),DOT },RGB(255,255,255) },
+		m_Rect{}, m_Drew{ false }, m_RealWorldRectan{ std::get<0>(lrConfigFile.ReadRect()),std::get<1>(lrConfigFile.ReadRect()) }
+	{
+		//DrawBkColor(m_FigureStyle.clrAxisBkColor);
+	}
+	~CFigure()
+	{
+		delete m_Axis.X_Label;
+		delete m_Axis.Y_Label;
+	}
 	void DrawBkColor(COLORREF clrColor)
 	{
 		if (m_Drew == true)
@@ -241,21 +336,11 @@ protected:
 			m_Drew = true;
 		}
 	}
-public:
-	CFigure(CDC* pCDC)
-		:m_Drawer{ pCDC }, m_Axis{ true,true,nullptr,nullptr,0,0 },
-		m_FigureStyle{ {3,RGB(0,122,204),DOT},RGB(255,255,255) },
-		m_Rect{}, m_Drew{ false } {}
-	CFigure(void)
-		:m_Drawer{}, m_Axis{ true,true,nullptr,nullptr,0,0 },
-		m_FigureStyle{ { 3,RGB(0,122,204),DOT },RGB(255,255,255) },
-		m_Rect{}, m_Drew{ false } {}
-	~CFigure()
-	{
-		delete m_Axis.X_Label;
-		delete m_Axis.Y_Label;
-	}
-
+	//Select object to draw
+	//Warning:When using this function, make sure that the m_Rect has been already modified by the client funcion of MFC library.
+	//For instance:CStatic AxisArea;AxisArea.GetClientRect(&(m_Figure.GetPlotRect()));//These procedure should already been executed.
+	//Then:m_Figure.SelectObject(pCDC);
+	//The showing rect should be known first, then the ratio of showing rect to real world rect can be set.
 	void SelectObject(CDC* pCDC)
 	{
 		if (IS_NULLPTR(pCDC))
@@ -265,6 +350,10 @@ public:
 		}
 		m_Drawer.SetDC(pCDC);
 		m_Drawer.SetClientRect(&m_Rect);
+
+		//Setting the ratio of showing rect to real world rect.
+		m_RWR_R_Ratio.Width = m_Rect.Width() / m_RealWorldRectan.Width;
+		m_RWR_R_Ratio.Height = m_Rect.Height() / m_RealWorldRectan.Height;
 	}
 	CRect& GetPlotRect(void)
 	{
@@ -280,6 +369,10 @@ public:
 		m_Axis.Y_Label = new wchar_t[strlen((char*)pYlabel)];
 		memcpy(m_Axis.Y_Label, pYlabel, sizeof(wchar_t) * strlen((char*)pYlabel));
 	}
+	void ClearPoints(void)
+	{
+		m_Drawer.DrawBackground(m_Rect, m_FigureStyle.clrAxisBkColor);
+	}
 	void Plot(POINT Point)
 	{
 		DrawBkColor(m_FigureStyle.clrAxisBkColor);
@@ -289,10 +382,56 @@ public:
 	void Plot(vector<POINT>& itrPoints)
 	{
 		DrawBkColor(m_FigureStyle.clrAxisBkColor);
-		for (vector<POINT>::iterator iter{}; iter != end(itrPoints); iter++)
+		for (vector<POINT>::iterator iter{ begin(itrPoints) }; iter != end(itrPoints); iter++)
 		{
 			m_Drawer.SetCurrentPoint(*iter);
 			m_Drawer.DrawPoint(m_FigureStyle.Point.nPointWidth, m_FigureStyle.Point.clrPointColor);
+		}
+	}
+	void Plot(vector<SPoint>& lrPoints)
+	{
+		DrawBkColor(m_FigureStyle.clrAxisBkColor);
+		for (vector<SPoint>::iterator iter{ begin(lrPoints) }; iter != end(lrPoints); iter++)
+		{
+			POINT Point{ static_cast<long>(iter->x),static_cast<long>(iter->y) };
+			m_Drawer.SetCurrentPoint(Point);
+			POINT TextPointTopLeft{ Point.x + 1,Point.y + 1 };
+			POINT TextPointBottomRight{ Point.x + 8,Point.y + 14 };
+			m_Drawer.DrawPoint(m_FigureStyle.Point.nPointWidth, m_FigureStyle.Point.clrPointColor);
+			wchar_t* pStr{ new wchar_t[2] };//Attention:this buffer count may case display imperfect
+			DrawTexts(TextPointTopLeft, TextPointBottomRight, NumToStr(iter->Num, pStr, 2), 1);
+		}
+	}
+	//In use
+	void Plot(struct SPoint& sPoint)
+	{
+		DrawBkColor(m_FigureStyle.clrAxisBkColor);
+		POINT Point{};
+		Point = RealWorldPointToPoint(sPoint);
+		m_Drawer.SetCurrentPoint(Point);		
+		POINT TextPointTopLeft{ Point.x + 1,m_Rect.Height()-Point.y + 1 };//With axis manipulation
+		POINT TextPointBottomRight{ Point.x + 8,m_Rect.Height()-Point.y + 14 };//With axis manipulation
+		m_Drawer.DrawPoint(m_FigureStyle.Point.nPointWidth, m_FigureStyle.Point.clrPointColor);
+		wchar_t* pStr{ new wchar_t[2] };//Attention:this buffer count may case display imperfect
+		DrawTexts(TextPointTopLeft, TextPointBottomRight, NumToStr(sPoint.Num, pStr, 2), 1);
+	}
+	//Special Plot. Using CFilter<SPoint>* as a input.
+	template<typename SPoint>
+	void Plot(CFilter<SPoint>* pPoints,int Count)
+	{
+		//DrawBkColor(m_FigureStyle.clrAxisBkColor);
+		for (int i{}; i < Count; i++)
+		{
+			for (vector<SPoint>::iterator iter{ begin(pPoints[i].GetBuffer()) }; iter != end(pPoints[i].GetBuffer()); iter++)
+			{
+				POINT Point{ static_cast<long>(iter->x),static_cast<long>(iter->y) };
+				m_Drawer.SetCurrentPoint(Point);
+				POINT TextPointTopLeft{ Point.x + 1,Point.y + 1 };
+				POINT TextPointBottomRight{ Point.x + 8,Point.y + 14 };
+				m_Drawer.DrawPoint(m_FigureStyle.Point.nPointWidth, m_FigureStyle.Point.clrPointColor);
+				wchar_t* pStr{ new wchar_t[2] };//Attention:this buffer count may case display imperfect
+				DrawTexts(TextPointTopLeft, TextPointBottomRight, NumToStr(iter->Num, pStr, 2), 1);
+			}
 		}
 	}
 	void MovePointTo(POINT Point)
@@ -300,81 +439,148 @@ public:
 		m_Drawer.MovePointTo(Point);
 	}
 
-	void NumToStr(long lNum,wchar_t* pString,int nStrLen)
+	wchar_t* NumToStr(long lNum,wchar_t* pString,int nStrLen)
 	{
 		_ltow_s(lNum, pString, nStrLen, 10);
+		
+		return pString;
 	}
 	void DrawTexts(POINT TopLeft, POINT BottomRight, LPCWSTR pString, int nStrLen)
 	{
 		m_Drawer.DrawTexts(TopLeft, BottomRight, pString, nStrLen);
 	}
-
 };
 
-template<typename T>
-class CFilter
-{
-	using std::vector;
-protected:
-	vector<T> m_Buffer;
-public:
-	CFilter(void) :m_Buffer{} {}
-	~CFilter() = default;
-	
-	void Insert(T InsertData)
-	{
-		m_Buffer.push_back(InsertData);
-	}
-	void Delete(T InsertData)
-	{
-		for (vector<T>::iterator& iter{}, int index{}; iter != end(m_Buffer); iter++, index++)
-		{
-			if (iter == InsertData)
-			{
-				m_Buffer.erase(index);
-			}
-		}
-	}
-	void Delete(int nIndex)
-	{
-		m_Buffer.erase(nIndex);
-	}
-	//This function takes a function object, which processes the m_Buffer
-	template<class Fun>
-	virtual void Filt(Fun& fFunObj)
-	{
-		fFunObj(&m_Buffer);
-	}
-};
+
 
 //This is a function object class, which sifts the unusual elements
-template<typename T>
+template<typename SPoint>
 class CSiftFilter
 {
 protected:
-public:
-	int operator()(CFilter& Filter)
-	{
+	SPoint m_Average;
 
+	void Average(vector<SPoint>& Filter)
+	{
+		int xAvr{};
+		int yAvr{};
+		
+		vector<int> Int{};
+
+		for (vector<SPoint>::iterator iter{ begin(Filter) }; iter != end(Filter); iter++)
+		{
+			xAvr += static_cast<int>((*iter).x);
+			yAvr += static_cast<int>((*iter).y);;
+		}
+		xAvr /= static_cast<int>(Filter.size());
+		yAvr /= static_cast<int>(Filter.size());
+
+		m_Average.x = xAvr;
+		m_Average.y = yAvr;
+	}
+	void SiftUnusual(vector<SPoint>& Filter,vector<SPoint>& Filtered)
+	{
+		Average(Filter);
+		for (vector<SPoint>::iterator iter{ begin(Filter) }; iter != end(Filter); iter++)
+		{
+			if ((*iter) > m_Average)
+			{
+				continue;
+			}
+			else
+			{
+				Filtered.push_back(*iter);
+			}
+		}
+	}
+public:
+	CSiftFilter(void) :m_Average{} {}
+	~CSiftFilter() = default;
+
+	void operator()(vector<SPoint>& Filter,vector<SPoint>& Filtered)
+	{
+		SiftUnusual(Filter,Filtered);
 	}
 };
-
-//Receive data structure definations
-struct SPoint
-{
-	unsigned int Num;
-	float x;
-	float y;
-};
-
-template<typename DataType>
+#include<algorithm>
+template<typename SPoint>
 class CReceiveData
 {
 protected:
-	vector<DataType> m_Buffer;
+	threadsafe_queue<SPoint> m_Buffer;
+
+	CFilter<SPoint>* m_Filter;
+	int m_FilterCount;
+
+	CSiftFilter<SPoint> m_SiftFilterFunObj;
+
+#define MAX_POINTS_TO_FIND 15
+	const int m_cPointsToFind;
+
+	void Copy(SPoint& pPoint)
+	{		
+		(m_Filter + pPoint.Num)->Insert(pPoint);
+	}
+	//This function finds the number of the moving points, which used to determin the number of buffer.
+	void FindMaxIndex(CLocAna& lrLocation)
+	{
+		vector<unsigned int> PointsToFindMax;
+		for (int i{}; i < m_cPointsToFind; i++)
+		{
+			PointsToFindMax.push_back(lrLocation.GetPoint().Num);
+		}
+		vector<unsigned int>::iterator fiter{ begin(PointsToFindMax) };
+		vector<unsigned int>::iterator liter{ end(PointsToFindMax) };
+		m_FilterCount = *(max_element(fiter, liter)) + 1;//The 1 is added because of the index starts with 0
+		//Construct the Buffers
+		m_Filter = { new CFilter<SPoint>[m_FilterCount] };
+	}
+
 public:
-	CReceiveData(void) :m_Buffer{} {}
-	~CReceiveData() = default;
+	CReceiveData(CLocAna& lrLocationAna) :m_Buffer{}, m_Filter{ nullptr }, m_SiftFilterFunObj{}, m_cPointsToFind{ MAX_POINTS_TO_FIND }, m_FilterCount{}
+	{
+		FindMaxIndex(lrLocationAna);
+	}
+	~CReceiveData()
+	{
+		delete[] m_Filter;
+	}
+
+	void Receive(CLocAna& rlLocation)
+	{
+		Copy(rlLocation.GetPoint());
+	}
+	void Process(void)
+	{
+		for (int i{}; i < m_FilterCount; i++)
+		{
+			if (m_Filter[i].Size() == 20)
+			{
+				m_Filter[i].Filt(m_SiftFilterFunObj);
+				for (vector<SPoint>::iterator iter{ begin(m_Filter[i].GetBuffer()) }; iter != end(m_Filter[i].GetBuffer()); iter++)
+				{
+					m_Buffer.push(*iter);
+				}
+				m_Filter[i].ClearBuff();
+			}
+		}
+	}
+	int GetFilterCount(void)
+	{
+		return m_FilterCount;
+	}
+	CFilter<SPoint>* GetFilterPionter(void)
+	{
+		return m_Filter;
+	}
+	SPoint Dequeue(void)
+	{
+		auto Ret{ m_Buffer.wait_and_pop() };
+		//auto Ret{ m_Buffer.front() };
+		//m_Buffer.try_pop();
+
+		return Ret;
+	}
 };
 
 // CVideoLocalizationDlg dialog
@@ -402,9 +608,6 @@ protected:
 	HICON m_hIcon;
 	// User variables
 
-	struct SPoint* m_pSPoint;
-	class CFigure m_Figure{};
-
 	// Generated message map functions
 	virtual BOOL OnInitDialog();
 	afx_msg void OnSysCommand(UINT nID, LPARAM lParam);
@@ -412,11 +615,29 @@ protected:
 	afx_msg HCURSOR OnQueryDragIcon();
 	DECLARE_MESSAGE_MAP()
 
+
 public:
 	// User variables
-	CStatic m_location_axis;
+	CReadFile m_FileReader;
+	CStatic m_location_axis;//Location axis control
+	CLocAna m_LocationAnalyser;
+	CReceiveData<SPoint> m_Receiver;
+	thread m_FigureInput;
+	thread m_ProcessData;
+
+	CStatic m_MainViewControl;//Main view control
+	CMatToMFCCImage m_MainViewImage;
+
+	CStatic m_SideViewControl;//A side view control 1
+	CMatToMFCCImage m_SideViewImage;
+
+	CCameraManager m_CameraManager;
+	CInfoFusion m_InfoFusion;
+
+	struct SPoint* m_pSPoint;
+	class CFigure m_Figure;
+
 	afx_msg void OnStnClickedLocationPoints();
-	afx_msg void OnBnClickedDraw();
 	afx_msg void OnAcnStartAnimate1();
-	afx_msg void OnTimer(UINT_PTR nIDEvent);
+	afx_msg void OnTimer(UINT_PTR nIDEvent);	
 };
